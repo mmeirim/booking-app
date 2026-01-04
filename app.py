@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 import json
@@ -8,6 +7,7 @@ from typing import List, Dict, Tuple
 import plotly.express as px
 import plotly.graph_objects as go
 import src.services.gsheet_service as gsheet_service
+import src.services.recommendation_service as recommendation_service
 
 # ============================================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -97,7 +97,7 @@ def verificar_sobreposicao(h1_inicio: str, h1_fim: str, h2_inicio: str, h2_fim: 
 # ============================================================================
 # FASE 4.1: EXPANSÃO DE RECORRÊNCIAS
 # ============================================================================
-
+@st.cache_data
 def expandir_recorrencias(df: pd.DataFrame) -> pd.DataFrame:
     """
     Expande todas as recorrências para gerar lista completa de ocorrências em 2026
@@ -127,7 +127,7 @@ def expandir_recorrencias(df: pd.DataFrame) -> pd.DataFrame:
                 data_atual = data_inicio
                 while data_atual <= data_fim:
                     row_copy = row.copy()
-                    row_copy['Data Ocorrência'] = data_atual.strftime('%d-%m-%Y')
+                    row_copy['Data Ocorrência'] = data_atual.strftime('%d/%m/%Y')
                     ocorrencias_expandidas.append(row_copy)
                     data_atual += timedelta(days=7)
             
@@ -136,7 +136,7 @@ def expandir_recorrencias(df: pd.DataFrame) -> pd.DataFrame:
                 data_atual = data_inicio
                 while data_atual <= data_fim:
                     row_copy = row.copy()
-                    row_copy['Data Ocorrência'] = data_atual.strftime('%d-%m-%Y')
+                    row_copy['Data Ocorrência'] = data_atual.strftime('%d/%m/%Y')
                     ocorrencias_expandidas.append(row_copy)
                     data_atual += timedelta(days=14)
             
@@ -160,7 +160,7 @@ def expandir_recorrencias(df: pd.DataFrame) -> pd.DataFrame:
                                 contador += 1
                                 if contador == ordem:
                                     row_copy = row.copy()
-                                    row_copy['Data Ocorrência'] = data_teste.strftime('%d-%m-%Y')
+                                    row_copy['Data Ocorrência'] = data_teste.strftime('%d/%m/%Y')
                                     ocorrencias_expandidas.append(row_copy)
                                     break
                         except ValueError:
@@ -184,7 +184,7 @@ def expandir_recorrencias(df: pd.DataFrame) -> pd.DataFrame:
 # ============================================================================
 # FASE 4.3: DETECÇÃO DE CONFLITOS
 # ============================================================================
-
+@st.cache_data
 def detectar_conflitos(df_expandido: pd.DataFrame) -> List[Dict]:
     """
     Detecta conflitos de horário considerando TODAS as opções (Opção 1 e 2)
@@ -240,129 +240,16 @@ def detectar_conflitos(df_expandido: pd.DataFrame) -> List[Dict]:
                 
     return conflitos
 
-
-# ============================================================================
-# FASE 4.4: SISTEMA DE SUGESTÕES
-# ============================================================================
-
-def gerar_sugestoes(df_original: pd.DataFrame, conflitos: List[Dict]) -> List[Dict]:
-    """
-    Gera sugestões de melhor opção de sala quando há múltiplas opções
-    """
-    sugestoes = []
-    
-    # Agrupar por Grupo + Atividade + Data Início
-    grupos = df_original.groupby(['Grupo', 'Atividade', 'Data Início'])
-    
-    for (grupo, atividade, data), opcoes_df in grupos:
-        opcoes = opcoes_df.to_dict('records')
-        
-        # Se tem apenas 1 opção, usar essa
-        if len(opcoes) == 1:
-            sugestao = {
-                'grupo': grupo,
-                'atividade': atividade,
-                'data': data,
-                'opcoes_disponiveis': f"{opcoes[0]['Sala']} ({opcoes[0]['Status']})",
-                'sala_recomendada': opcoes[0]['Sala'],
-                'justificativa': 'Única opção disponível',
-                'conflitos': 0,
-                'responsavel': opcoes[0]['Responsável']
-            }
-            sugestoes.append(sugestao)
-            continue
-        
-        # Se tem múltiplas opções, analisar conflitos
-        opcao1 = next((o for o in opcoes if o['Status'] == 'Opção 1'), None)
-        opcao2 = next((o for o in opcoes if o['Status'] == 'Opção 2'), None)
-        
-        if not opcao1 and not opcao2:
-            continue
-        
-        # Contar conflitos para cada opção
-        conflitos_opcao1 = len([
-            c for c in conflitos 
-            if opcao1 and c['sala'] == opcao1['Sala'] and c['data'] == data
-        ]) if opcao1 else 999
-        
-        conflitos_opcao2 = len([
-            c for c in conflitos 
-            if opcao2 and c['sala'] == opcao2['Sala'] and c['data'] == data
-        ]) if opcao2 else 999
-        
-        # Decidir melhor opção
-        opcoes_str = []
-        if opcao1:
-            opcoes_str.append(f"{opcao1['Sala']} (Opção 1)")
-        if opcao2:
-            opcoes_str.append(f"{opcao2['Sala']} (Opção 2)")
-        
-        if conflitos_opcao1 == 0 and conflitos_opcao2 == 0:
-            sala_recomendada = opcao1['Sala'] if opcao1 else opcao2['Sala']
-            justificativa = 'Ambas livres - Opção 1 como padrão'
-            conflitos_total = 0
-        elif conflitos_opcao1 == 0:
-            sala_recomendada = opcao1['Sala']
-            justificativa = 'Opção 1 sem conflitos'
-            conflitos_total = 0
-        elif conflitos_opcao2 == 0:
-            sala_recomendada = opcao2['Sala']
-            justificativa = 'Opção 2 sem conflitos'
-            conflitos_total = 0
-        elif conflitos_opcao1 < conflitos_opcao2:
-            sala_recomendada = opcao1['Sala'] if opcao1 else opcao2['Sala']
-            justificativa = f'Menos conflitos ({conflitos_opcao1} vs {conflitos_opcao2})'
-            conflitos_total = conflitos_opcao1
-        else:
-            sala_recomendada = opcao2['Sala'] if opcao2 else opcao1['Sala']
-            justificativa = f'Menos conflitos ({conflitos_opcao2} vs {conflitos_opcao1})'
-            conflitos_total = conflitos_opcao2
-        
-        sugestao = {
-            'grupo': grupo,
-            'atividade': atividade,
-            'data': data,
-            'opcoes_disponiveis': ' ou '.join(opcoes_str),
-            'sala_recomendada': sala_recomendada,
-            'justificativa': justificativa,
-            'conflitos': conflitos_total,
-            'responsavel': opcoes[0]['Responsável']
-        }
-        sugestoes.append(sugestao)
-    
-    return sugestoes
-
-def buscar_salas_disponiveis(df_expandido, data, hora_inicio, hora_fim):
-    """Retorna lista de salas que não têm reservas no período informado"""
-    df = df_expandido.copy()
-    df['Hora Fim Calculada'] = df.apply(
-        lambda row: calcular_hora_fim(row['Hora Início'], row['Hora fim']), axis=1
-    )
-    
-    todas_salas = set(df['Sala'].unique())
-    
-    # Filtrar reservas no mesmo dia
-    reservas_dia = df[df['Data Ocorrência'] == data]
-    
-    salas_ocupadas = set()
-    for _, res in reservas_dia.iterrows():
-        # Lógica de sobreposição: (Início1 < Fim2) e (Fim1 > Início2)
-        if (hora_inicio < res['Hora Fim Calculada']) and (hora_fim > res['Hora Início']):
-            salas_ocupadas.add(res['Sala'])
-    
-    salas_livres = todas_salas - salas_ocupadas
-    return sorted(list(salas_livres))
-
 # ============================================================================
 # ESTATÍSTICAS E ANÁLISES
 # ============================================================================
 
-def calcular_estatisticas(df_original: pd.DataFrame, df_expandido: pd.DataFrame, 
+def calcular_estatisticas(df_reservas: pd.DataFrame, df_expandido: pd.DataFrame, 
                          conflitos: List[Dict], sugestoes: List[Dict]) -> Dict:
     """Calcula estatísticas gerais do sistema"""
     
-    salas = df_original['Sala'].unique()
-    grupos = df_original['Grupo'].unique()
+    salas = df_reservas['Sala'].unique()
+    grupos = df_reservas['Grupo'].unique()
     
     # Conflitos por sala
     conflitos_por_sala = {}
@@ -377,7 +264,7 @@ def calcular_estatisticas(df_original: pd.DataFrame, df_expandido: pd.DataFrame,
     percentual_sem_conflito = (sugestoes_sem_conflito / len(sugestoes) * 100) if sugestoes else 100
     
     return {
-        'total_reservas_originais': len(df_original),
+        'total_reservas_originais': len(df_reservas),
         'total_ocorrencias': len(df_expandido),
         'total_conflitos': len(conflitos),
         'total_salas': len(salas),
@@ -481,32 +368,41 @@ def main():
     
     # Carregar dados
     with st.spinner("📥 Carregando dados do Google Sheets..."):
-        df_original = gsheet_service.conn_gsheets(spreadsheet_id, worksheet_name)
+    #     dfs_original = gsheet_service.load_all_data_gsheets(spreadsheet_id)
     
-    if df_original.empty:
-        st.error("❌ Não foi possível carregar os dados. Verifique as configurações.")
-        st.info("""
-        **Como configurar:**
-        1. Crie um Service Account no Google Cloud Console
-        2. Compartilhe a planilha com o email do Service Account
-        3. Adicione as credenciais no arquivo `.streamlit/secrets.toml`
+    # if not dfs_original:
+    #     st.error("❌ Não foi possível carregar os dados. Verifique as configurações.")
+    #     st.info("""
+    #     **Como configurar:**
+    #     1. Crie um Service Account no Google Cloud Console
+    #     2. Compartilhe a planilha com o email do Service Account
+    #     3. Adicione as credenciais no arquivo `.streamlit/secrets.toml`
         
-        ```toml
-        spreadsheet_id = "seu-spreadsheet-id"
+    #     ```toml
+    #     spreadsheet_id = "seu-spreadsheet-id"
         
-        [gcp_service_account]
-        type = "service_account"
-        project_id = "seu-projeto"
-        private_key_id = "..."
-        private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
-        client_email = "..."
-        client_id = "..."
-        ```
-        """)
+    #     [gcp_service_account]
+    #     type = "service_account"
+    #     project_id = "seu-projeto"
+    #     private_key_id = "..."
+    #     private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+    #     client_email = "..."
+    #     client_id = "..."
+    #     ```
+    #     """)
+    #     return
+    
+    # df_reservas = dfs_original.get('Reservas', pd.DataFrame())
+        df_reservas = gsheet_service.conn_gsheets(spreadsheet_id)
+    if df_reservas.empty:
+        st.error("❌ A aba 'Reservas' não foi encontrada ou está vazia.")
         return
     
+    df_salas = pd.DataFrame() #dfs_original.get('Salas', pd.DataFrame()) 
+    df_grupos = pd.DataFrame() #dfs_original.get('Grupos', pd.DataFrame())
+    
     # Validar estrutura
-    valido, erros = validar_estrutura_dados(df_original)
+    valido, erros = validar_estrutura_dados(df_reservas)
     if not valido:
         st.error("❌ Erro na estrutura dos dados:")
         for erro in erros:
@@ -515,15 +411,15 @@ def main():
     
     # Processar dados
     with st.spinner("⚙️ Processando recorrências..."):
-        df_expandido = expandir_recorrencias(df_original)
+        df_expandido = expandir_recorrencias(df_reservas)
     
     with st.spinner("🔍 Detectando conflitos..."):
         conflitos = detectar_conflitos(df_expandido)
     
     with st.spinner("💡 Gerando sugestões..."):
-        sugestoes = gerar_sugestoes(df_original, conflitos)
+        sugestoes = recommendation_service.generate_recommendations(df_expandido, conflitos)
     
-    stats = calcular_estatisticas(df_original, df_expandido, conflitos, sugestoes)
+    stats = calcular_estatisticas(df_reservas, df_expandido, conflitos, sugestoes)
     
     # Dashboard de Estatísticas
     st.header("📊 Estatísticas Gerais")
@@ -627,11 +523,16 @@ def main():
         if filtro_sala != "Todas":
             conflitos_filtrados = [c for c in conflitos_filtrados if c['sala'] == filtro_sala]
         if filtro_data:
-            data_str = filtro_data.strftime('%d-%m-%Y')
+            data_str = filtro_data.strftime('%d/%m/%Y')
             conflitos_filtrados = [c for c in conflitos_filtrados if c['data'] == data_str]
 
         st.write(f"Mostrando **{len(conflitos_filtrados)}** conflitos")
-
+        
+        conflitos_filtrados = sorted(
+            conflitos_filtrados, 
+            key=lambda x: (datetime.strptime(x['data'], '%d/%m/%Y'))
+        )
+        
         # --- LISTAGEM DE CONFLITOS (CARD STYLE NATIVO) ---
         for idx, conf in enumerate(conflitos_filtrados, 1):
             # Usamos um container com borda para simular o "card"
@@ -655,12 +556,11 @@ def main():
                         **{conf['grupo1']}** *{conf['atividade1']}* 🕒 {conf['horario1']}  
                         👤 {conf['responsavel1']}
                         """)
-                        salas_livres = buscar_salas_disponiveis(
+                        salas_livres = recommendation_service.search_available_rooms(
                         df_expandido, 
                         conf['data'], 
                         conf['horario1'].split("-")[0], # Assumindo que você guardou os objetos de hora no dict
-                        conf['horario1'].split("-")[1]
-                    )
+                        conf['horario1'].split("-")[1])
 
                         if salas_livres:
                             with st.success("💡 **Sugestão de Reoferecimento:**"):
@@ -681,6 +581,21 @@ def main():
                         **{conf['grupo2']}** *{conf['atividade2']}* 🕒 {conf['horario2']}  
                         👤 {conf['responsavel2']}
                         """)
+                        salas_livres = recommendation_service.search_available_rooms(
+                        df_expandido, 
+                        conf['data'], 
+                        conf['horario1'].split("-")[0], # Assumindo que você guardou os objetos de hora no dict
+                        conf['horario1'].split("-")[1])
+
+                        if salas_livres:
+                            with st.success("💡 **Sugestão de Reoferecimento:**"):
+                                st.markdown(f"As seguintes salas estão livres neste dia e horário:")
+                                # Exibe as salas como "tags" usando st.write ou markdown
+                                salas_formatadas = " · ".join([f"`{s}`" for s in salas_livres])
+                                st.markdown(salas_formatadas)
+                        else:
+                            with st.warning("⚠️ **Atenção:** Não há outras salas disponíveis para este horário."):
+                                st.markdown("Considere ajustar o horário ou entrar em contato com a administração.")
             
             st.write("") # Espaçamento entre cards
     
@@ -768,7 +683,7 @@ def main():
             df_filtrado = df_filtrado[df_filtrado['Grupo'] == filtro_grupo_cal]
         
         if 'filtro_mes' in locals() and filtro_mes != "Todos":
-            df_filtrado = df_filtrado[df_filtrado['Data Ocorrência'].str.startswith(filtro_mes)]
+            df_filtrado = df_filtrado[df_filtrado['Data Ocorrência'].str.contains(f"/{filtro_mes}/")]
         
         # Busca textual
         busca = st.text_input("🔍 Buscar por atividade ou responsável", "")
@@ -827,8 +742,8 @@ def main():
         ])
         
         with tab_dados1:
-            st.write(f"**{len(df_original)} reservas cadastradas**")
-            st.dataframe(df_original, use_container_width=True, height=400)
+            st.write(f"**{len(df_reservas)} reservas cadastradas**")
+            st.dataframe(df_reservas, use_container_width=True, height=400)
         
         with tab_dados2:
             st.write(f"**{len(df_expandido)} ocorrências em 2026**")
@@ -840,7 +755,7 @@ def main():
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                csv_original = df_original.to_csv(index=False).encode('utf-8')
+                csv_original = df_reservas.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     "📥 Reservas Originais (CSV)",
                     csv_original,
