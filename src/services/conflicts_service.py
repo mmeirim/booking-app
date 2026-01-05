@@ -83,6 +83,9 @@ def find_conflicts(df_expandido: pd.DataFrame) -> List[Dict]:
                 if r2['Hora Início'] >= r1['Hora Fim Calculada']:
                     break  # Optimization: Stop inner loop early
                 
+                if r1['Grupo'] == r2['Grupo']:
+                    continue  # Mesma reserva, não conta como conflito
+                
                 # If we reach here, there is a conflict
                 conflitos.append({
                     'id': sequence_generator.generate_id([sala, data, r1['id_reserva'], r2['id_reserva']]),

@@ -96,7 +96,7 @@ def load_all_data_gsheets(spreadsheet_id: str):
         
         try:
             dict_dataframes['Reservas'] = process_worksheet(spreadsheet.worksheet("Reservas"),
-                                                                 ['Sala', 'Dia da semana', 'Data Início', 'Hora Início', 
+                                                                 ['Sala', 'Dia da semana', 'Data Início', 'Data Fim', 'Hora Início', 
                                                                   'Hora fim', 'Recorrência', 'Grupo', 'Atividade','Responsável',
                                                                   'Status'])
             dict_dataframes['Salas'] = process_worksheet(spreadsheet.worksheet("Salas"), ['Sala', 'Capacidade'])

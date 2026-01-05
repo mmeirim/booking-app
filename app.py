@@ -543,6 +543,9 @@ def main():
                 for c in conflitos
             )
         
+        df_filtrado = df_filtrado.sort_values(by=['Data Ocorrência','Hora Início'],
+                                              key=lambda x: pd.to_datetime(x, dayfirst=True))
+        
         # Exibir reservas
         for idx, row in df_filtrado.head(100).iterrows():
             conflito_presente = tem_conflito(row)

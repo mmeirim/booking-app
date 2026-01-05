@@ -20,8 +20,10 @@ def expand_recurring_events(df: pd.DataFrame) -> pd.DataFrame:
         # Expandir baseado no tipo de recorrência
         try:
             data_inicio = pd.to_datetime(row['Data Início'], dayfirst=True)
-            data_fim = datetime(2026, 12, 31)
-            
+            data_fim = pd.to_datetime(row['Data Fim'], dayfirst=True)
+            if pd.isna(data_fim):
+                data_fim = datetime(2026, 12, 31)
+                        
             partes = recorrencia.split('-')
             tipo = partes[0]
             
