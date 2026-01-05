@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
-import json
 from typing import List, Dict, Tuple
 import plotly.express as px
 import plotly.graph_objects as go
 import src.services.gsheet_service as gsheet_service
 import src.services.recommendation_service as recommendation_service
+import src.services.reccuring_service as recurring_service
+import src.services.conflicts_service as conflicts_service
 
 # ============================================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -45,201 +46,6 @@ def validar_estrutura_dados(df: pd.DataFrame) -> Tuple[bool, List[str]]:
                         break
     
     return len(erros) == 0, erros
-
-
-# ============================================================================
-# FASE 4.2: CÁLCULO DE HORÁRIOS
-# ============================================================================
-
-def calcular_hora_fim(hora_inicio: str, hora_fim: str) -> str:
-    """
-    Calcula hora fim. Se vazia, adiciona 3 horas à hora início.
-    Retorna string no formato HH:MM
-    """
-    if hora_fim and str(hora_fim).strip() and str(hora_fim) != 'nan':
-        return str(hora_fim).strip()
-    
-    try:
-        # Parse hora início
-        h, m = map(int, hora_inicio.split(':'))
-        
-        # Adicionar 3 horas
-        h_fim = (h + 3) % 24
-        
-        return f"{h_fim:02d}:{m:02d}"
-    except:
-        return "22:00"  # Fallback
-
-
-def horario_para_minutos(horario: str) -> int:
-    """Converte horário HH:MM para minutos desde meia-noite"""
-    try:
-        h, m = map(int, horario.split(':'))
-        return h * 60 + m
-    except:
-        return 0
-
-
-def verificar_sobreposicao(h1_inicio: str, h1_fim: str, h2_inicio: str, h2_fim: str) -> bool:
-    """
-    Verifica se dois intervalos de horário se sobrepõem
-    Retorna True se há sobreposição
-    """
-    inicio1 = horario_para_minutos(h1_inicio)
-    fim1 = horario_para_minutos(h1_fim)
-    inicio2 = horario_para_minutos(h2_inicio)
-    fim2 = horario_para_minutos(h2_fim)
-    
-    # Não há sobreposição se um termina antes do outro começar
-    return not (fim1 <= inicio2 or fim2 <= inicio1)
-
-
-# ============================================================================
-# FASE 4.1: EXPANSÃO DE RECORRÊNCIAS
-# ============================================================================
-@st.cache_data
-def expandir_recorrencias(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Expande todas as recorrências para gerar lista completa de ocorrências em 2026
-    """
-    ocorrencias_expandidas = []
-    
-    for idx, row in df.iterrows():
-        recorrencia = str(row['Recorrência']).strip() if pd.notna(row['Recorrência']) else ''
-        
-        # Se não tem recorrência, é única
-        if not recorrencia or recorrencia == 'nan' or recorrencia == '':
-            row_copy = row.copy()
-            row_copy['Data Ocorrência'] = row['Data Início']
-            ocorrencias_expandidas.append(row_copy)
-            continue
-        
-        # Expandir baseado no tipo de recorrência
-        try:
-            data_inicio = pd.to_datetime(row['Data Início'], dayfirst=True)
-            data_fim = datetime(2026, 12, 31)
-            
-            partes = recorrencia.split('-')
-            tipo = partes[0]
-            
-            if tipo == 'Semanal' and len(partes) >= 2:
-                # Semanal-Segunda, Semanal-Terça, etc
-                data_atual = data_inicio
-                while data_atual <= data_fim:
-                    row_copy = row.copy()
-                    row_copy['Data Ocorrência'] = data_atual.strftime('%d/%m/%Y')
-                    ocorrencias_expandidas.append(row_copy)
-                    data_atual += timedelta(days=7)
-            
-            elif tipo == 'Quinzenal' and len(partes) >= 2:
-                # Quinzenal-Quarta, etc
-                data_atual = data_inicio
-                while data_atual <= data_fim:
-                    row_copy = row.copy()
-                    row_copy['Data Ocorrência'] = data_atual.strftime('%d/%m/%Y')
-                    ocorrencias_expandidas.append(row_copy)
-                    data_atual += timedelta(days=14)
-            
-            elif tipo == 'Mensal' and len(partes) >= 3:
-                # Mensal-2º-Domingo, Mensal-1º-Segunda, etc
-                ordem = int(partes[1].replace('º', ''))
-                dia_semana_nome = partes[2]
-                
-                dias_semana = {
-                    'Domingo': 0, 'Segunda': 1, 'Terça': 2, 'Quarta': 3,
-                    'Quinta': 4, 'Sexta': 5, 'Sábado': 6
-                }
-                dia_semana_alvo = dias_semana.get(dia_semana_nome, 0)
-                
-                for mes in range(1, 13):
-                    contador = 0
-                    for dia in range(1, 32):
-                        try:
-                            data_teste = datetime(2026, mes, dia)
-                            if data_teste.weekday() == (dia_semana_alvo - 1) % 7:
-                                contador += 1
-                                if contador == ordem:
-                                    row_copy = row.copy()
-                                    row_copy['Data Ocorrência'] = data_teste.strftime('%d/%m/%Y')
-                                    ocorrencias_expandidas.append(row_copy)
-                                    break
-                        except ValueError:
-                            break
-            
-            else:
-                # Recorrência não reconhecida, trata como única
-                row_copy = row.copy()
-                row_copy['Data Ocorrência'] = row['Data Início']
-                ocorrencias_expandidas.append(row_copy)
-        
-        except Exception as e:
-            st.warning(f"⚠️ Erro ao expandir recorrência na linha {idx}: {str(e)}")
-            row_copy = row.copy()
-            row_copy['Data Ocorrência'] = row['Data Início']
-            ocorrencias_expandidas.append(row_copy)
-    
-    return pd.DataFrame(ocorrencias_expandidas)
-
-
-# ============================================================================
-# FASE 4.3: DETECÇÃO DE CONFLITOS
-# ============================================================================
-@st.cache_data
-def detectar_conflitos(df_expandido: pd.DataFrame) -> List[Dict]:
-    """
-    Detecta conflitos de horário considerando TODAS as opções (Opção 1 e 2)
-    Retorna lista de conflitos com detalhes
-    """
-    conflitos = []
-    
-    # 1. Pre-calculate end times and convert to proper datetime/time objects for fast comparison
-    # Assuming calcular_hora_fim returns a string or object, convert to numeric/timedeltas if possible
-    df = df_expandido.copy()
-    df['Hora Fim Calculada'] = df.apply(
-        lambda row: calcular_hora_fim(row['Hora Início'], row['Hora fim']), axis=1
-    )
-    
-    # 2. Group by Sala and Data. Only events in the same room on the same day can conflict.
-    grouped = df.groupby(['Sala', 'Data Ocorrência'])
-    
-    for (sala, data), group in grouped:
-        # If only one event in this room/day, no conflict possible
-        if len(group) < 2:
-            continue
-            
-        # 3. Sort by Start Time
-        # This is the "Sweep" part: a conflict can only happen with events 
-        # that start before the current one ends.
-        sorted_group = group.sort_values('Hora Início').to_dict('records')
-        
-        for i in range(len(sorted_group)):
-            for j in range(i + 1, len(sorted_group)):
-                r1 = sorted_group[i]
-                r2 = sorted_group[j]
-                
-                # Because it's sorted, if r2 starts AFTER r1 ends, 
-                # then no subsequent r (r3, r4...) will conflict with r1 either.
-                if r2['Hora Início'] >= r1['Hora Fim Calculada']:
-                    break  # Optimization: Stop inner loop early
-                
-                # If we reach here, there is a conflict
-                conflitos.append({
-                    'sala': sala,
-                    'data': data,
-                    'grupo1': r1['Grupo'],
-                    'atividade1': r1['Atividade'],
-                    'horario1': f"{r1['Hora Início']}-{r1['Hora Fim Calculada']}",
-                    'responsavel1': r1['Responsável'],
-                    'status1': r1['Status'],
-                    'grupo2': r2['Grupo'],
-                    'atividade2': r2['Atividade'],
-                    'horario2': f"{r2['Hora Início']}-{r2['Hora Fim Calculada']}",
-                    'responsavel2': r2['Responsável'],
-                    'status2': r2['Status'],
-                })
-                
-    return conflitos
-
 # ============================================================================
 # ESTATÍSTICAS E ANÁLISES
 # ============================================================================
@@ -250,6 +56,7 @@ def calcular_estatisticas(df_reservas: pd.DataFrame, df_expandido: pd.DataFrame,
     
     salas = df_reservas['Sala'].unique()
     grupos = df_reservas['Grupo'].unique()
+    total_ocorrencias = len(df_expandido)
     
     # Conflitos por sala
     conflitos_por_sala = {}
@@ -260,12 +67,18 @@ def calcular_estatisticas(df_reservas: pd.DataFrame, df_expandido: pd.DataFrame,
     sala_mais_conflitos = max(conflitos_por_sala.items(), key=lambda x: x[1]) if conflitos_por_sala else ('Nenhuma', 0)
     
     # Percentual sem conflito
-    sugestoes_sem_conflito = len([s for s in sugestoes if s['conflitos'] == 0])
-    percentual_sem_conflito = (sugestoes_sem_conflito / len(sugestoes) * 100) if sugestoes else 100
+    reservas_com_conflito = set()
+    for c in conflitos:
+        reservas_com_conflito.add(c['id_reserva1']) # Assumindo que você tem um ID único
+        reservas_com_conflito.add(c['id_reserva2'])
+
+    total_com_conflito = len(reservas_com_conflito)
+    total_sem_conflito = total_ocorrencias - total_com_conflito
+    percentual_sem_conflito = (total_sem_conflito / total_ocorrencias * 100) if total_ocorrencias > 0 else 100
     
     return {
         'total_reservas_originais': len(df_reservas),
-        'total_ocorrencias': len(df_expandido),
+        'total_ocorrencias': total_ocorrencias,
         'total_conflitos': len(conflitos),
         'total_salas': len(salas),
         'total_grupos': len(grupos),
@@ -368,38 +181,37 @@ def main():
     
     # Carregar dados
     with st.spinner("📥 Carregando dados do Google Sheets..."):
-    #     dfs_original = gsheet_service.load_all_data_gsheets(spreadsheet_id)
+        dfs_original = gsheet_service.load_all_data_gsheets(spreadsheet_id)
     
-    # if not dfs_original:
-    #     st.error("❌ Não foi possível carregar os dados. Verifique as configurações.")
-    #     st.info("""
-    #     **Como configurar:**
-    #     1. Crie um Service Account no Google Cloud Console
-    #     2. Compartilhe a planilha com o email do Service Account
-    #     3. Adicione as credenciais no arquivo `.streamlit/secrets.toml`
+    if not dfs_original:
+        st.error("❌ Não foi possível carregar os dados. Verifique as configurações.")
+        st.info("""
+        **Como configurar:**
+        1. Crie um Service Account no Google Cloud Console
+        2. Compartilhe a planilha com o email do Service Account
+        3. Adicione as credenciais no arquivo `.streamlit/secrets.toml`
         
-    #     ```toml
-    #     spreadsheet_id = "seu-spreadsheet-id"
+        ```toml
+        spreadsheet_id = "seu-spreadsheet-id"
         
-    #     [gcp_service_account]
-    #     type = "service_account"
-    #     project_id = "seu-projeto"
-    #     private_key_id = "..."
-    #     private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
-    #     client_email = "..."
-    #     client_id = "..."
-    #     ```
-    #     """)
-    #     return
+        [gcp_service_account]
+        type = "service_account"
+        project_id = "seu-projeto"
+        private_key_id = "..."
+        private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
+        client_email = "..."
+        client_id = "..."
+        ```
+        """)
+        return
     
-    # df_reservas = dfs_original.get('Reservas', pd.DataFrame())
-        df_reservas = gsheet_service.conn_gsheets(spreadsheet_id)
+    df_reservas = dfs_original.get('Reservas', pd.DataFrame())
     if df_reservas.empty:
         st.error("❌ A aba 'Reservas' não foi encontrada ou está vazia.")
         return
     
-    df_salas = pd.DataFrame() #dfs_original.get('Salas', pd.DataFrame()) 
-    df_grupos = pd.DataFrame() #dfs_original.get('Grupos', pd.DataFrame())
+    df_salas = dfs_original.get('Salas', pd.DataFrame()) 
+    df_grupos = dfs_original.get('Grupos', pd.DataFrame())
     
     # Validar estrutura
     valido, erros = validar_estrutura_dados(df_reservas)
@@ -411,13 +223,13 @@ def main():
     
     # Processar dados
     with st.spinner("⚙️ Processando recorrências..."):
-        df_expandido = expandir_recorrencias(df_reservas)
+        df_expandido = recurring_service.expand_recurring_events(df_reservas)
     
     with st.spinner("🔍 Detectando conflitos..."):
-        conflitos = detectar_conflitos(df_expandido)
+        conflitos = conflicts_service.find_conflicts(df_expandido)
     
     with st.spinner("💡 Gerando sugestões..."):
-        sugestoes = recommendation_service.generate_recommendations(df_expandido, conflitos)
+        sugestoes = recommendation_service.generate_recommendations(df_expandido, df_salas, df_grupos, conflitos)
     
     stats = calcular_estatisticas(df_reservas, df_expandido, conflitos, sugestoes)
     
@@ -456,10 +268,10 @@ def main():
         )
     
     # Tabs principais
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab4, tab5 = st.tabs([
         "📈 Dashboard", 
         "⚠️ Conflitos", 
-        "✅ Sugestões", 
+        # "✅ Sugestões", 
         "📅 Calendário",
         "📋 Dados Brutos"
     ])
@@ -511,17 +323,31 @@ def main():
             return
 
         # --- ÁREA DE FILTROS ---
-        col_f1, col_f2 = st.columns(2)
+        col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
         with col_f1:
             salas = sorted(list(set(c['sala'] for c in conflitos)))
             filtro_sala = st.selectbox("Filtrar por Sala", ["Todas"] + salas)
         with col_f2:
+            grupos = sorted(list(set([c['grupo1'] for c in conflitos] + [c['grupo2'] for c in conflitos])))
+            filtro_grupo = st.selectbox("Filtrar por Grupo", ["Todos"] + grupos)
+        with col_f3:
+            filtro_duracao = st.selectbox("Filtrar por Duração do conflito", ["Todos", "Menos de 30min"])
+        with col_f4:
+            filtro_dia_semana = st.selectbox("Filtrar por Dia da Semana", ["Todos", "Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"])
+        with col_f5:
             filtro_data = st.date_input("Filtrar por Data", value=None, format="DD/MM/YYYY")
 
         # Filtros lógicos
         conflitos_filtrados = conflitos
         if filtro_sala != "Todas":
             conflitos_filtrados = [c for c in conflitos_filtrados if c['sala'] == filtro_sala]
+        if filtro_grupo != "Todos":
+            conflitos_filtrados = [c for c in conflitos_filtrados if c['grupo1'] == filtro_grupo or c['grupo2'] == filtro_grupo]
+        if filtro_duracao != "Todos":
+            ids_com_ajuste = {s['id_conflito'] for s in sugestoes if s.get('ajuste_tempo') != ""}
+            conflitos_filtrados = [c for c in conflitos_filtrados if c['id'] in ids_com_ajuste]
+        if filtro_dia_semana != "Todos":
+            conflitos_filtrados = [c for c in conflitos_filtrados if filtro_dia_semana.lower() in c['dia_semana']]
         if filtro_data:
             data_str = filtro_data.strftime('%d/%m/%Y')
             conflitos_filtrados = [c for c in conflitos_filtrados if c['data'] == data_str]
@@ -535,15 +361,17 @@ def main():
         
         # --- LISTAGEM DE CONFLITOS (CARD STYLE NATIVO) ---
         for idx, conf in enumerate(conflitos_filtrados, 1):
+            sug = [s for s in sugestoes if s['id_conflito'] == conf['id']][0]
+            cor = "🟢" if sug['resolvido'] else "🔴"
             # Usamos um container com borda para simular o "card"
-            with st.container(border=True):
+            with st.expander(f"{cor} {sug['sala_original']} | {sug['grupo1']} & {sug['grupo2']} ({conf['data']})"):
                 # Cabeçalho do Card
                 header_col1, header_col2 = st.columns([3, 1])
                 with header_col1:
-                    st.markdown(f"### 📍 {conf['sala']}")
-                    st.caption(f"📅 Data: {conf['data']}",)
-                with header_col2:
-                    st.error(f"Conflito #{idx}")                            
+                    st.markdown(f"### 📍 {conf['sala']} :violet-badge[{sug['ajuste_tempo']}]")
+                    st.markdown(f"📅 Data: {conf['data']}")
+                # with header_col2:
+                #     st.error(f"Conflito #{idx}")                           
 
                 # Corpo do Card (As duas reservas lado a lado)
                 res1_col, res2_col = st.columns(2)
@@ -556,22 +384,21 @@ def main():
                         **{conf['grupo1']}** *{conf['atividade1']}* 🕒 {conf['horario1']}  
                         👤 {conf['responsavel1']}
                         """)
-                        salas_livres = recommendation_service.search_available_rooms(
-                        df_expandido, 
-                        conf['data'], 
-                        conf['horario1'].split("-")[0], # Assumindo que você guardou os objetos de hora no dict
-                        conf['horario1'].split("-")[1])
-
-                        if salas_livres:
-                            with st.success("💡 **Sugestão de Reoferecimento:**"):
-                                st.markdown(f"As seguintes salas estão livres neste dia e horário:")
+                        
+                        salas_recomendadas = sug['salas_recomendadas_g1']
+                        salas_livres = sug['outras_salas_livres_g1']
+                        if salas_recomendadas:
+                            with st.success("💡 **Sugestão de realocação:**"):
+                                st.markdown(f"Salas recomendadas neste dia e horário:")
                                 # Exibe as salas como "tags" usando st.write ou markdown
-                                salas_formatadas = " · ".join([f"`{s}`" for s in salas_livres])
-                                st.markdown(salas_formatadas)
+                                salas_formatadas = " ".join([f":green-badge[{s}]" for s in sorted(salas_recomendadas)])
+                                st.markdown(f"**Salas Recomendadas:** {salas_formatadas}")
+                        if salas_livres:    
+                            salas_formatadas = " ".join([f":orange-badge[{s}]" for s in sorted(salas_livres)])
+                            st.markdown(f"**Demais salas Livres:** {salas_formatadas}")
                         else:
                             with st.warning("⚠️ **Atenção:** Não há outras salas disponíveis para este horário."):
-                                st.markdown("Considere ajustar o horário ou entrar em contato com a administração.")
-                        
+                                st.markdown("Considere ajustar o horário ou entrar em contato com a administração.")                      
                 
                 with res2_col:
                     st.markdown("**Reserva 2**")
@@ -581,75 +408,89 @@ def main():
                         **{conf['grupo2']}** *{conf['atividade2']}* 🕒 {conf['horario2']}  
                         👤 {conf['responsavel2']}
                         """)
-                        salas_livres = recommendation_service.search_available_rooms(
-                        df_expandido, 
-                        conf['data'], 
-                        conf['horario1'].split("-")[0], # Assumindo que você guardou os objetos de hora no dict
-                        conf['horario1'].split("-")[1])
-
-                        if salas_livres:
-                            with st.success("💡 **Sugestão de Reoferecimento:**"):
-                                st.markdown(f"As seguintes salas estão livres neste dia e horário:")
+                        
+                        salas_recomendadas = sug['salas_recomendadas_g2']
+                        salas_livres = sug['outras_salas_livres_g2']
+                        if salas_recomendadas:
+                            with st.success("💡 **Sugestão de realocação:**"):
+                                st.markdown(f"Salas recomendadas neste dia e horário:")
                                 # Exibe as salas como "tags" usando st.write ou markdown
-                                salas_formatadas = " · ".join([f"`{s}`" for s in salas_livres])
-                                st.markdown(salas_formatadas)
+                                salas_formatadas = " ".join([f":green-badge[{s}]" for s in sorted(salas_recomendadas)])
+                                st.markdown(f"**Salas Recomendadas:** {salas_formatadas}")
+                        if salas_livres:    
+                            salas_formatadas = " ".join([f":orange-badge[{s}]" for s in sorted(salas_livres)])
+                            st.markdown(f"**Demais salas Livres:** {salas_formatadas}")
                         else:
                             with st.warning("⚠️ **Atenção:** Não há outras salas disponíveis para este horário."):
                                 st.markdown("Considere ajustar o horário ou entrar em contato com a administração.")
-            
-            st.write("") # Espaçamento entre cards
-    
+                
     # TAB 3: SUGESTÕES
-    with tab3:
-        st.subheader(f"✅ Sugestões de Salas ({len(sugestoes)})")
+    # with tab3:
+    #     st.subheader(f"✅ Sugestões de Salas ({len(sugestoes)})")
         
-        if len(sugestoes) == 0:
-            st.info("ℹ️ Nenhuma atividade com múltiplas opções encontrada.")
-        else:
-            # Filtros
-            filtro_conflito = st.radio(
-                "Filtrar por:",
-                ["Todas", "Apenas sem conflito", "Apenas com conflito"],
-                horizontal=True
-            )
+    #     if not sugestoes:
+    #         st.info("ℹ️ Nenhuma atividade com múltiplas opções encontrada.")
+    #     else:
+    #         # --- Área de Filtros Dinâmicos ---
+    #         col_f1, col_f2 = st.columns(2)
             
-            sugestoes_filtradas = sugestoes
-            if filtro_conflito == "Apenas sem conflito":
-                sugestoes_filtradas = [s for s in sugestoes if s['conflitos'] == 0]
-            elif filtro_conflito == "Apenas com conflito":
-                sugestoes_filtradas = [s for s in sugestoes if s['conflitos'] > 0]
+    #         with col_f1:
+    #             # Pega todos os nomes únicos de grupos (posições 1 e 2)
+    #             todos_grupos = sorted(list(set([s['grupo1'] for s in sugestoes] + [s['grupo2'] for s in sugestoes])))
+    #             filtro_grupo = st.selectbox("Filtrar por Grupo", ["Todos"] + todos_grupos)
+                
+    #         with col_f2:
+    #             todas_salas = sorted(list(set([s['sala_original'] for s in sugestoes])))
+    #             filtro_sala = st.selectbox("Filtrar por Sala do Conflito", ["Todas"] + todas_salas)
+
+    #         # --- Lógica de Filtragem ---
+    #         sugestoes_filtradas = sugestoes
             
-            st.write(f"**Mostrando {len(sugestoes_filtradas)} de {len(sugestoes)} sugestões**")
+    #         if filtro_grupo != "Todos":
+    #             sugestoes_filtradas = [
+    #                 s for s in sugestoes_filtradas 
+    #                 if s['grupo1'] == filtro_grupo or s['grupo2'] == filtro_grupo
+    #             ]
+                
+    #         if filtro_sala != "Todas":
+    #             sugestoes_filtradas = [
+    #                 s for s in sugestoes_filtradas if s['sala_original'] == filtro_sala
+    #             ]
+
+    #         st.write(f"**Mostrando {len(sugestoes_filtradas)} sugestões**")
             
-            # Listar sugestões
-            for idx, sug in enumerate(sugestoes_filtradas, 1):
-                cor = "🟢" if sug['conflitos'] == 0 else "🟡"
-                with st.expander(f"{cor} {sug['atividade']} - {sug['grupo']}"):
-                    col1, col2 = st.columns([2, 1])
+    #         # --- Listagem (Seu loop original ajustado) ---
+    #         for idx, sug in enumerate(sugestoes_filtradas, 1):
+    #             # Lógica de cor baseada na resolução
+    #             cor = "🟢" if sug['resolvido'] else "🔴"
+                
+    #             with st.expander(f"{cor} {sug['sala_original']} | {sug['grupo1']} & {sug['grupo2']}"):
+    #                 col1, col2 = st.columns([2, 1])
                     
-                    with col1:
-                        st.markdown(f"""
-                        **Detalhes:**  
-                        👥 **Grupo:** {sug['grupo']}  
-                        📝 **Atividade:** {sug['atividade']}  
-                        📅 **Data:** {sug['data']}  
-                        👤 **Responsável:** {sug['responsavel']}
-                        """)
+    #                 with col1:
+    #                     st.markdown(f"""
+    #                     📍 **Sala:** {sug['sala_original']}  
+    #                     📅 **Data:** {sug['data']}  
+    #                     👥 **Envolvidos:** {sug['grupo1']} e {sug['grupo2']}
+    #                     """)
                         
-                        st.markdown(f"""
-                        **Opções Disponíveis:**  
-                        {sug['opcoes_disponiveis']}
-                        """)
+    #                     if sug['ajuste_tempo']:
+    #                         st.warning(sug['ajuste_tempo'])
                     
-                    with col2:
-                        st.markdown(f"""
-                        **Recomendação:**
-                        """)
-                        st.success(f"🏠 **{sug['sala_recomendada']}**")
-                        st.info(f"💡 {sug['justificativa']}")
+    #                 with col2:
+    #                     # Exibe alerta de conflito curto se houver
+    #                     if sug['ajuste_tempo']:
+    #                         st.warning(sug['ajuste_tempo'])
+    #                     st.markdown("**Recomendação de Sala:**")
+    #                     if sug['salas_recomendadas']:
+    #                         # Exibe a primeira (melhor) recomendação em destaque
+    #                         st.success(f"🏠 **{sug['salas_recomendadas'][0]}**")
+    #                         if len(sug['salas_recomendadas']) > 1:
+    #                             st.caption(f"Outras opções: {', '.join(sug['salas_recomendadas'][1:])}")
+    #                     else:
+    #                         st.error("Nenhuma sala disponível")
                         
-                        if sug['conflitos'] > 0:
-                            st.warning(f"⚠️ {sug['conflitos']} conflito(s)")
+    #                     st.info(f"💡 {sug['justificativa']}")
     
     # TAB 4: CALENDÁRIO
     with tab4:
@@ -717,7 +558,7 @@ def main():
                     """)
                 
                 with col2:
-                    hora_fim_calc = calcular_hora_fim(row['Hora Início'], row['Hora fim'])
+                    hora_fim_calc = conflicts_service.calculate_end_hour(row['Hora Início'], row['Hora fim'])
                     st.markdown(f"""
                     🏠 **{row['Sala']}**  
                     📅 {row['Data Ocorrência']}  
