@@ -145,6 +145,11 @@ def generate_calendar_options(resources, mode):
         elif mode == "Agenda":
             calendar_options = {
                 **calendar_options,
+                "headerToolbar": {
+                    "left": "today prev,next",
+                    "center": "title",
+                    "right": "timeGridDay,timeGridWeek",
+                },
                 "initialView": "timeGridWeek",
             }
         elif mode == "timeline":
