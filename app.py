@@ -9,6 +9,7 @@ import src.services.gsheet_service as gsheet_service
 import src.services.recommendation_service as recommendation_service
 import src.services.reccuring_service as recurring_service
 import src.services.conflicts_service as conflicts_service
+import src.ui.pages.calendar as calendar_page
 
 # ============================================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -147,37 +148,12 @@ def criar_timeline_ocupacao(df_expandido: pd.DataFrame):
 # ============================================================================
 
 def main():
-    # Sidebar
-    with st.sidebar:
-        # st.image("https://via.placeholder.com/200x80/1f77b4/ffffff?text=Igreja", use_column_width=True)
-        st.title("⚙️ Configurações")
-        
-        # Input do Spreadsheet ID
-        spreadsheet_id = st.text_input(
-            "Google Spreadsheet ID",
-            value=st.secrets.get("spreadsheet_id", ""),
-            help="ID da planilha Google Sheets (parte da URL)"
-        )
-        
-        worksheet_name = st.text_input(
-            "Nome da Aba",
-            value="Reservas",
-            help="Nome da aba que contém os dados"
-        )
-        
-        st.divider()
-        
-        # Botão de atualizar
-        if st.button("🔄 Atualizar Dados", type="primary", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-        
-        st.divider()
-        st.caption("💡 Dados atualizados automaticamente a cada 60 segundos")
+    # Input do Spreadsheet ID
+    spreadsheet_id = st.secrets.get("spreadsheet_id", "")
     
-    # Header principal
-    st.title("🏛️ Sistema de Gestão de Reservas de Salas 2026")
-    st.markdown("**Análise Completa de Conflitos e Sugestões**")
+    # # Header principal
+    st.title("""🏛️ Sistema de Gestão de Reservas de Salas""")
+    # st.markdown("**Análise Completa de Conflitos e Sugestões**")
     
     # Carregar dados
     with st.spinner("📥 Carregando dados do Google Sheets..."):
@@ -230,84 +206,37 @@ def main():
     
     with st.spinner("💡 Gerando sugestões..."):
         sugestoes = recommendation_service.generate_recommendations(df_expandido, df_salas, df_grupos, conflitos)
-    
-    stats = calcular_estatisticas(df_reservas, df_expandido, conflitos, sugestoes)
-    
-    # Dashboard de Estatísticas
-    st.header("📊 Estatísticas Gerais")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric(
-            "Total de Ocorrências",
-            f"{stats['total_ocorrencias']:,}",
-            delta=f"{stats['total_reservas_originais']} reservas base"
-        )
-    
-    with col2:
-        st.metric(
-            "Conflitos Detectados",
-            stats['total_conflitos'],
-            delta="Requer atenção" if stats['total_conflitos'] > 0 else "Tudo OK",
-            delta_color="inverse"
-        )
-    
-    with col3:
-        st.metric(
-            "Atividades c/ Opções",
-            stats['atividades_com_opcoes'],
-            delta=f"{stats['percentual_sem_conflito']}% sem conflito"
-        )
-    
-    with col4:
-        st.metric(
-            "Salas Cadastradas",
-            stats['total_salas'],
-            delta=f"{stats['total_grupos']} grupos"
-        )
+      
+    with st.sidebar:
+        # st.image("https://via.placeholder.com/200x80/1f77b4/ffffff?text=Igreja", use_column_width=True)
+        st.title("Paróquia Santo Afonso")
+                
+        st.markdown("### 📊 Estatísticas")
+        st.metric("Total de Reservas", len(df_expandido))
+        st.metric("Total de Salas", len(df_salas))
+        st.metric("Total de Conflitos", len(conflitos), 
+                  delta="Requer atenção" if len(conflitos) > 0 else "Tudo OK", delta_color="inverse")
+        st.metric("Grupos Ativos", len(df_expandido['Grupo'].unique()))
+        
+        st.divider()
+        
+        # Botão de atualizar
+        if st.button("🔄 Atualizar Dados", type="primary", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
     
     # Tabs principais
-    tab1, tab2, tab4, tab5 = st.tabs([
-        "📈 Dashboard", 
+    tab1, tab2, tab5 = st.tabs([
+        "📅 Calendário", 
         "⚠️ Conflitos", 
         # "✅ Sugestões", 
-        "📅 Calendário",
+        # "📅 Calendário",
         "📋 Dados Brutos"
     ])
     
-    # TAB 1: DASHBOARD
+    # # TAB 1: DASHBOARD
     with tab1:
-        st.subheader("Visão Geral do Sistema")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.plotly_chart(criar_grafico_ocupacao_salas(df_expandido), use_container_width=True)
-        
-        with col2:
-            st.plotly_chart(criar_grafico_distribuicao_grupos(df_expandido), use_container_width=True)
-        
-        # st.plotly_chart(criar_timeline_ocupacao(df_expandido), use_container_width=True)
-        
-        # Sala com mais conflitos
-        st.subheader("🎯 Insights")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.info(f"""
-            **Sala com Mais Conflitos:**  
-            🏠 {stats['sala_mais_conflitos'][0]}  
-            ⚠️ {stats['sala_mais_conflitos'][1]} conflitos
-            """)
-        
-        with col2:
-            st.success(f"""
-            **Taxa de Sucesso:**  
-            ✅ {stats['percentual_sem_conflito']}%  
-            Opções sem conflito
-            """)
-    
+        calendar_page.generate_calendar_page(df_expandido, df_salas, pd.DataFrame(conflitos))
     # TAB 2: CONFLITOS
     with tab2:
         # Cabeçalho com ícone e contagem
@@ -493,87 +422,87 @@ def main():
     #                     st.info(f"💡 {sug['justificativa']}")
     
     # TAB 4: CALENDÁRIO
-    with tab4:
-        st.subheader("📅 Calendário de Reservas")
+    # with tab4:
+    #     st.subheader("📅 Calendário de Reservas")
         
-        # Filtros
-        col1, col2, col3 = st.columns(3)
+    #     # Filtros
+    #     col1, col2, col3 = st.columns(3)
         
-        with col1:
-            salas_unicas = sorted(df_expandido['Sala'].unique())
-            filtro_sala_cal = st.selectbox("Filtrar por Sala", ["Todas"] + list(salas_unicas))
+    #     with col1:
+    #         salas_unicas = sorted(df_expandido['Sala'].unique())
+    #         filtro_sala_cal = st.selectbox("Filtrar por Sala", ["Todas"] + list(salas_unicas))
         
-        with col2:
-            grupos_unicos = sorted(df_expandido['Grupo'].unique())
-            filtro_grupo_cal = st.selectbox("Filtrar por Grupo", ["Todos"] + list(grupos_unicos))
+    #     with col2:
+    #         grupos_unicos = sorted(df_expandido['Grupo'].unique())
+    #         filtro_grupo_cal = st.selectbox("Filtrar por Grupo", ["Todos"] + list(grupos_unicos))
         
-        with col3:
-            # Filtro de mês
-            meses = sorted(df_expandido['Data Ocorrência'].unique())
-            if meses:
-                mes_padrao = meses[0][3:5]  # YYYY-MM
-                filtro_mes = st.selectbox("Filtrar por Mês", ["Todos"] + sorted(list(set([m[3:5] for m in meses]))))
+    #     with col3:
+    #         # Filtro de mês
+    #         meses = sorted(df_expandido['Data Ocorrência'].unique())
+    #         if meses:
+    #             mes_padrao = meses[0][3:5]  # YYYY-MM
+    #             filtro_mes = st.selectbox("Filtrar por Mês", ["Todos"] + sorted(list(set([m[3:5] for m in meses]))))
         
-        # Aplicar filtros
-        df_filtrado = df_expandido.copy()
+    #     # Aplicar filtros
+    #     df_filtrado = df_expandido.copy()
         
-        if filtro_sala_cal != "Todas":
-            df_filtrado = df_filtrado[df_filtrado['Sala'] == filtro_sala_cal]
+    #     if filtro_sala_cal != "Todas":
+    #         df_filtrado = df_filtrado[df_filtrado['Sala'] == filtro_sala_cal]
         
-        if filtro_grupo_cal != "Todos":
-            df_filtrado = df_filtrado[df_filtrado['Grupo'] == filtro_grupo_cal]
+    #     if filtro_grupo_cal != "Todos":
+    #         df_filtrado = df_filtrado[df_filtrado['Grupo'] == filtro_grupo_cal]
         
-        if 'filtro_mes' in locals() and filtro_mes != "Todos":
-            df_filtrado = df_filtrado[df_filtrado['Data Ocorrência'].str.contains(f"/{filtro_mes}/")]
+    #     if 'filtro_mes' in locals() and filtro_mes != "Todos":
+    #         df_filtrado = df_filtrado[df_filtrado['Data Ocorrência'].str.contains(f"/{filtro_mes}/")]
         
-        # Busca textual
-        busca = st.text_input("🔍 Buscar por atividade ou responsável", "")
-        if busca:
-            df_filtrado = df_filtrado[
-                df_filtrado['Atividade'].str.contains(busca, case=False, na=False) |
-                df_filtrado['Responsável'].str.contains(busca, case=False, na=False)
-            ]
+    #     # Busca textual
+    #     busca = st.text_input("🔍 Buscar por atividade ou responsável", "")
+    #     if busca:
+    #         df_filtrado = df_filtrado[
+    #             df_filtrado['Atividade'].str.contains(busca, case=False, na=False) |
+    #             df_filtrado['Responsável'].str.contains(busca, case=False, na=False)
+    #         ]
         
-        st.write(f"**Mostrando {len(df_filtrado)} de {len(df_expandido)} reservas**")
+    #     st.write(f"**Mostrando {len(df_filtrado)} de {len(df_expandido)} reservas**")
         
-        # Verificar conflitos para cada reserva
-        def tem_conflito(row):
-            return any(
-                c['sala'] == row['Sala'] and c['data'] == row['Data Ocorrência']
-                for c in conflitos
-            )
+    #     # Verificar conflitos para cada reserva
+    #     def tem_conflito(row):
+    #         return any(
+    #             c['sala'] == row['Sala'] and c['data'] == row['Data Ocorrência']
+    #             for c in conflitos
+    #         )
         
-        df_filtrado = df_filtrado.sort_values(by=['Data Ocorrência','Hora Início'],
-                                              key=lambda x: pd.to_datetime(x, dayfirst=True))
+    #     df_filtrado = df_filtrado.sort_values(by=['Data Ocorrência','Hora Início'],
+    #                                           key=lambda x: pd.to_datetime(x, dayfirst=True))
         
-        # Exibir reservas
-        for idx, row in df_filtrado.head(100).iterrows():
-            conflito_presente = tem_conflito(row)
-            cor_borda = "🔴" if conflito_presente else "🟢"
+    #     # Exibir reservas
+    #     for idx, row in df_filtrado.head(100).iterrows():
+    #         conflito_presente = tem_conflito(row)
+    #         cor_borda = "🔴" if conflito_presente else "🟢"
             
-            with st.container():
-                col1, col2 = st.columns([3, 1])
+    #         with st.container():
+    #             col1, col2 = st.columns([3, 1])
                 
-                with col1:
-                    st.markdown(f"""
-                    {cor_borda} **{row['Atividade']}**  
-                    👥 {row['Grupo']} • 👤 {row['Responsável']}
-                    """)
+    #             with col1:
+    #                 st.markdown(f"""
+    #                 {cor_borda} **{row['Atividade']}**  
+    #                 👥 {row['Grupo']} • 👤 {row['Responsável']}
+    #                 """)
                 
-                with col2:
-                    hora_fim_calc = conflicts_service.calculate_end_hour(row['Hora Início'], row['Hora fim'])
-                    st.markdown(f"""
-                    🏠 **{row['Sala']}**  
-                    📅 {row['Data Ocorrência']}  
-                    ⏰ {row['Hora Início']} - {hora_fim_calc}
-                    """)
-                    if conflito_presente:
-                        st.error("⚠️ Conflito")
+    #             with col2:
+    #                 hora_fim_calc = conflicts_service.calculate_end_hour(row['Hora Início'], row['Hora fim'])
+    #                 st.markdown(f"""
+    #                 🏠 **{row['Sala']}**  
+    #                 📅 {row['Data Ocorrência']}  
+    #                 ⏰ {row['Hora Início']} - {hora_fim_calc}
+    #                 """)
+    #                 if conflito_presente:
+    #                     st.error("⚠️ Conflito")
                 
-                st.divider()
+    #             st.divider()
         
-        if len(df_filtrado) > 100:
-            st.info(f"ℹ️ Mostrando apenas as primeiras 100 reservas. Use os filtros para refinar.")
+    #     if len(df_filtrado) > 100:
+    #         st.info(f"ℹ️ Mostrando apenas as primeiras 100 reservas. Use os filtros para refinar.")
     
     # TAB 5: DADOS BRUTOS
     with tab5:

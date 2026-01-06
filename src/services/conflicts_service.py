@@ -108,3 +108,5 @@ def find_conflicts(df_expandido: pd.DataFrame) -> List[Dict]:
 
     return conflitos
 
+def has_conflict(id, conflict_ids):    
+    return id in conflict_ids
