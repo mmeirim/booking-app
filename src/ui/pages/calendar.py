@@ -7,9 +7,9 @@ from src.services.calendar_service import prepare_events, prepare_resources, gen
 from src.services.conflicts_service import calculate_end_hour
 
 @st.cache_data
-def get_cached_calendar_data(df_expandido, df_salas, groups):
+def get_cached_calendar_data(df_expandido, df_salas, groups, ids_em_conflito):
     colors = generate_color_palette(groups)
-    events = prepare_events(df_expandido, colors)
+    events = prepare_events(df_expandido, colors, ids_em_conflito)
     resources = prepare_resources(df_salas)
     df_expandido["Data Ocorrência View"] = pd.to_datetime(df_expandido["Data Ocorrência"], dayfirst=True).dt.tz_localize(None)
     return events, resources, df_expandido
@@ -20,27 +20,88 @@ def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, c
     if "last_df_view" not in st.session_state:
         st.session_state["last_df_view"] = pd.DataFrame()  # Inicializa vazio
 
-    col_calendario, col_lista = st.columns([0.7, 0.3])
-
-    with col_calendario:
+    col1, col2, col3 = st.columns(3)
+    with col1:
         mode = st.selectbox("Visualização:", get_calendar_modes(), key="calendar_view_mode")
+    with col2:
+        weekday_map = {
+            "Segunda": 1, "Terça": 2, "Quarta": 3, 
+            "Quinta": 4, "Sexta": 5, "Sábado": 6, "Domingo": 0
+        }
+        weekday_filter = st.selectbox("Dias da Semana:", ["Todos"] + list(weekday_map.keys()),
+                                        index=0, key="calendar_start_weekday")
+    with col3:
+        st.space(20)
+        apenas_conflitos = st.toggle("Apenas Conflitos", value=False, key="calendar_only_conflicts")
+        
+    col_calendario, col_lista = st.columns([0.8, 0.2])
+
+    with col_calendario: 
+        hidden_days = []   
+        if weekday_filter != "Todos":
+                hidden_days = [d for d in range(7) if d != weekday_map[weekday_filter]]
         
         # Cache dos eventos e recursos
         unique_groups = tuple(df_expandido['Grupo'].unique())
-        events_base, resources, df_expandido = get_cached_calendar_data(df_expandido, df_salas, unique_groups)
+        events_base, resources, df_expandido = get_cached_calendar_data(df_expandido, df_salas, unique_groups, ids_em_conflito)
         calendar_options = generate_calendar_options(resources, mode)
         
+        if hidden_days:
+            mode = "Agenda"
+            calendar_options["hiddenDays"] = hidden_days
+            calendar_options["fixedWeekCount"] = False
+            calendar_options["showNonCurrentDates"] = False
+            calendar_options["initialView"] = "timeGrid"
+            calendar_options["duration"] = {"months": 1}
+            calendar_options["headerToolbar"] = {
+                "left": "today prev,next",
+                "center": "title",
+                "right": "timeGrid,timeGridDay",}
+            
+        if apenas_conflitos:
+            opacity_style = """
+                .evento-limpo {
+                    opacity: 0.15 !important;
+                    filter: grayscale(80%);
+                    pointer-events: none; /* Opcional: desabilita clique nos sem conflito */
+                }
+                .evento-conflito {
+                    opacity: 1 !important;
+                    z-index: 99999 !important; /* Traz os conflitos para frente */
+                }
+            """
+        else:
+            opacity_style = ""
+
+        # Combine com seus outros estilos
+        full_custom_css = f"""
+            {opacity_style}
+            # .fc-event-past {{
+            #     opacity: 0.8;
+            # }}
+            .fc-event-time {{
+                font-style: italic;
+            }}
+            .fc .fc-toolbar-title {{
+                font-size: 1.1rem !important; /* Ajuste conforme necessário */
+                font-weight: bold;
+            }}
+            .fc .fc-button {{
+                font-size: 0.85rem !important; 
+                padding: 4px 8px !important;
+            }}
+        """
+            
         state = calendar(
             events=st.session_state.get("events", events_base),
             options=calendar_options,
-            key=f"full_calendar_{mode}",
+            custom_css= full_custom_css,
+            key=f"full_calendar_{mode}_{weekday_filter}_{apenas_conflitos}",
         )
         
         # st.write(state)
 
     with col_lista:
-        st.subheader("📋 Compromissos no Período")
-        apenas_conflitos = st.toggle("Apenas Conflitos", value=False)
         # print(state["eventsSet"]["view"] if state else "No state")
               
         # --- FILTRO ULTRA-RÁPIDO ---
@@ -57,6 +118,11 @@ def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, c
             mask = (df_expandido['Data Ocorrência View'] >= v_start) & (df_expandido['Data Ocorrência View'] < v_end)
             df_filtrado = df_expandido.loc[mask].copy()
             
+            if hidden_days:
+                shown_days = set(range(7)) - set(hidden_days)
+                shown_days_pd = [(d - 1) % 7 for d in shown_days]
+                df_filtrado = df_filtrado[df_filtrado['Data Ocorrência View'].dt.weekday.isin(shown_days_pd)]
+            
             if apenas_conflitos:
                 # Filtra o dataframe mantendo apenas IDs que estão no set de conflitos
                 df_filtrado = df_filtrado[df_filtrado['id_reserva'].isin(ids_em_conflito)]
@@ -68,7 +134,8 @@ def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, c
         # --- RENDERIZAÇÃO SEM TRAVAMENTO ---
         # Usamos um único container com scroll e limitamos a 50 itens
         # Para evitar lentidão, vamos compor o HTML/Markdown em uma lista e imprimir de uma vez
-        with st.container(height=800):
+        st.space("medium")
+        with st.container(height=900):
             if df_view.empty:
                 st.info("Nenhum evento visível.")
             else:

@@ -14,9 +14,11 @@ def prepare_resources(df_expandido):
     return resources
 
 @st.cache_data
-def prepare_events(df_expandido, group_colors):
+def prepare_events(df_expandido, group_colors, ids_em_conflito):
     events = []
     for _, row in df_expandido.iterrows():
+        tem_conflito = row['id_reserva'] in ids_em_conflito
+        
         # Combine date and time for start and end
         data_ocorrencia = convert_date_format(row['Data Ocorrência'])
         start_datetime = f"{data_ocorrencia}T{row['Hora Início']}:00-03:00"
@@ -35,12 +37,14 @@ def prepare_events(df_expandido, group_colors):
             "backgroundColor": color,
             "borderColor": color,
             "resourceId": row['Sala'],
+            "className": "evento-conflito" if tem_conflito else "evento-limpo",
             "extendedProps": {
                 "responsavel": row['Responsável'],
                 "status": row['Status'],
                 "grupo": row['Grupo'],
                 "atividade": row['Atividade'],
-                "id_reserva": row['id_reserva']
+                "id_reserva": row['id_reserva'],
+                "conflito": tem_conflito
             }
         }
         
