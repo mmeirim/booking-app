@@ -1,8 +1,7 @@
 import streamlit as st
 import pandas as pd
 from streamlit_calendar import calendar
-from datetime import datetime
-import time
+from typing import List, Dict
 from src.services.calendar_service import prepare_events, prepare_resources, generate_calendar_options, generate_color_palette, get_calendar_modes
 from src.services.conflicts_service import calculate_end_hour
 
@@ -14,9 +13,9 @@ def get_cached_calendar_data(df_expandido, df_salas, groups, ids_em_conflito):
     df_expandido["Data Ocorrência View"] = pd.to_datetime(df_expandido["Data Ocorrência"], dayfirst=True).dt.tz_localize(None)
     return events, resources, df_expandido
 
-def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, conflitos: list):
+def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, conflitos:List[Dict], sugestoes: List[Dict]):
     # IDs em conflito (Set é O(1) - busca instantânea)
-    ids_em_conflito = set(conflitos['id_reserva1']).union(set(conflitos['id_reserva2']))
+    ids_em_conflito = set([c['id_reserva1'] for c in conflitos]).union(set([c['id_reserva2'] for c in conflitos]))
     if "last_df_view" not in st.session_state:
         st.session_state["last_df_view"] = pd.DataFrame()  # Inicializa vazio
 
@@ -102,19 +101,10 @@ def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, c
         # st.write(state)
 
     with col_lista:
-        # print(state["eventsSet"]["view"] if state else "No state")
-              
-        # --- FILTRO ULTRA-RÁPIDO ---
         if state and "eventsSet" in state and "view" in state["eventsSet"]:
-            # print("ENTROU")
-            # Pegamos as datas da visão atual do calendário
             v_start = pd.to_datetime(state["eventsSet"]["view"]["activeStart"]).tz_localize(None)
             v_end = pd.to_datetime(state["eventsSet"]["view"]["activeEnd"]).tz_localize(None)
             
-            # print(f"VIEW RANGE: {v_start} to {v_end}, df_expandido dates from {df_expandido['Data Ocorrência View'].min()} to {df_expandido['Data Ocorrência View'].max()}")
-            
-            # Filtro vetorizado (muito rápido)
-            # Certifique-se que 'Data Ocorrência' já foi convertida no início do script
             mask = (df_expandido['Data Ocorrência View'] >= v_start) & (df_expandido['Data Ocorrência View'] < v_end)
             df_filtrado = df_expandido.loc[mask].copy()
             
@@ -124,40 +114,74 @@ def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, c
                 df_filtrado = df_filtrado[df_filtrado['Data Ocorrência View'].dt.weekday.isin(shown_days_pd)]
             
             if apenas_conflitos:
-                # Filtra o dataframe mantendo apenas IDs que estão no set de conflitos
                 df_filtrado = df_filtrado[df_filtrado['id_reserva'].isin(ids_em_conflito)]
             
             st.session_state["last_df_view"] = df_filtrado.sort_values(['Data Ocorrência View', 'Hora Início'])
-            
-        df_view = st.session_state["last_df_view"]
 
-        # --- RENDERIZAÇÃO SEM TRAVAMENTO ---
-        # Usamos um único container com scroll e limitamos a 50 itens
-        # Para evitar lentidão, vamos compor o HTML/Markdown em uma lista e imprimir de uma vez
+        df_view = st.session_state.get("last_df_view", pd.DataFrame())
+
+        # --- OTIMIZAÇÃO DE PERFORMANCE (Lookup Tables) ---
+        # 1. Transformar Series em Set para busca instantânea O(1)
+        set_view_ids = set(df_view['id_reserva'].astype(str))
+
+        # 2. Pré-filtrar conflitos e criar um dicionário de busca por ID de reserva
+        # Isso elimina o loop aninhado dentro da renderização
+        dict_conflitos = {}
+        for c in conflitos:
+            id1, id2 = str(c['id_reserva1']), str(c['id_reserva2'])
+            if id1 in set_view_ids or id2 in set_view_ids:
+                dict_conflitos[id1] = c
+                dict_conflitos[id2] = c
+
+        # 3. Criar dicionário de sugestões mapeado pelo ID do conflito
+        dict_sugestoes = {str(s['id_conflito']): s for s in sugestoes}
+
         st.space("medium")
         with st.container(height=900):
             if df_view.empty:
                 st.info("Nenhum evento visível.")
             else:
+                # Iteração eficiente
                 for idx, row in df_view.head(50).iterrows():
-                    # Usamos o ID que você colocou no extendedProps (id_reserva)
-                    id_atual = row.get('id_reserva') or row.get('id')
+                    id_atual = str(row.get('id_reserva') or row.get('id'))
+                    
+                    # Busca instantânea nos dicionários (O(1))
+                    conflito_data = dict_conflitos.get(id_atual)
                     conf_pres = id_atual in ids_em_conflito
                     
                     emoji = "🔴" if conf_pres else "🟢"
                     h_fim = calculate_end_hour(row['Hora Início'], row['Hora fim'])
                     data_str = row['Data Ocorrência View'].strftime('%d/%m')
                     
-                    # Markdown simplificado para evitar criar muitos objetos st.columns
-                    # Isso é o que impede o navegador de travar
                     st.markdown(f"""
-                    **{emoji} {row['Sala']}** | ⏰ {data_str} • {row['Hora Início']}-{h_fim}   
+                    **{emoji} {row['Sala']}** | ⏰ {data_str} • {row['Hora Início']}-{h_fim}  
                     👥 {row['Grupo']} | {row['Atividade']}
                     """)
                     
-                    if conf_pres:
-                        st.error("⚠️ Conflito!", icon="🚨")
+                    if conf_pres and conflito_data:
+                        st.error("⚠️ Conflito!")
+                        # Busca a sugestão usando o ID do conflito encontrado
+                        sug = dict_sugestoes.get(str(conflito_data['id']))
+                        if sug:
+                            if id_atual == conflito_data['id_reserva1']:
+                                salas_recomendadas = sug['salas_recomendadas_g1']
+                                salas_livres = sug['outras_salas_livres_g1']
+                            else:
+                                salas_recomendadas = sug['salas_recomendadas_g2']
+                                salas_livres = sug['outras_salas_livres_g2']
+                                
+                            salas_recomendadas = [s for s in salas_recomendadas if s and str(s).strip()]
+                            salas_livres = [s for s in salas_livres if s and str(s).strip()]
+                            
+                            if salas_recomendadas or salas_livres:
+                                salas_recomendadas_f = " ".join([f":green-badge[{s}]" for s in sorted(salas_recomendadas)])
+                                salas_livres_f = " ".join([f":orange-badge[{s}]" for s in sorted(salas_livres)])
+                                st.markdown(f"{salas_recomendadas_f} {salas_livres_f}")
+                            else:
+                                st.caption("⚠️ **Atenção:** Não há outras salas disponíveis para este horário.")
+                                                    
                     st.divider()
+
 
     # Sincroniza o estado global
     if state.get("eventsSet") is not None:

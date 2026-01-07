@@ -152,6 +152,19 @@ def main():
     spreadsheet_id = st.secrets.get("spreadsheet_id", "")
     
     # # Header principal
+    st.markdown("""
+        <style>
+        header.stAppHeader {
+            background-color: transparent;
+        }
+        section.stMain .block-container {
+            padding-top: 0rem;
+            z-index: 1;
+        }
+        </style>""", 
+        unsafe_allow_html=True
+        )
+    
     st.title("""🏛️ Sistema de Gestão de Reservas de Salas""")
     # st.markdown("**Análise Completa de Conflitos e Sugestões**")
     
@@ -236,7 +249,7 @@ def main():
     
     # # TAB 1: DASHBOARD
     with tab1:
-        calendar_page.generate_calendar_page(df_expandido, df_salas, pd.DataFrame(conflitos))
+        calendar_page.generate_calendar_page(df_expandido, df_salas, conflitos, sugestoes)
     # TAB 2: CONFLITOS
     with tab2:
         # Cabeçalho com ícone e contagem
