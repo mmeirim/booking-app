@@ -10,6 +10,7 @@ import src.services.recommendation_service as recommendation_service
 import src.services.reccuring_service as recurring_service
 import src.services.conflicts_service as conflicts_service
 import src.ui.pages.calendar as calendar_page
+import src.utils.dataframe_styler as df_styler
 
 # ============================================================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -525,58 +526,156 @@ def main():
     with tab5:
         st.subheader("📋 Dados Brutos")
         
-        tab_dados1, tab_dados2, tab_dados3 = st.tabs([
-            "Reservas Originais",
-            "Ocorrências Expandidas",
-            "Exportar"
+        tab_reservas, tab_conflitos = st.tabs([
+            "Reservas",
+            "Conflitos"
         ])
-        
-        with tab_dados1:
-            st.write(f"**{len(df_reservas)} reservas cadastradas**")
-            st.dataframe(df_reservas, use_container_width=True, height=400)
-        
-        with tab_dados2:
-            st.write(f"**{len(df_expandido)} ocorrências em 2026**")
-            st.dataframe(df_expandido, use_container_width=True, height=400)
-        
-        with tab_dados3:
-            st.write("**Exportar Dados**")
-            
-            col1, col2, col3 = st.columns(3)
-            
+                
+        with tab_reservas:
+            csv_expandido = df_expandido.to_csv(index=False).encode('utf-8')
+            col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
-                csv_original = df_reservas.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    "📥 Reservas Originais (CSV)",
-                    csv_original,
-                    "reservas_originais.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
-            
+                salas = st.multiselect("Salas", options=sorted(df_expandido['Sala'].unique()), placeholder="Todas")
             with col2:
-                csv_expandido = df_expandido.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    "📥 Ocorrências 2026 (CSV)",
-                    csv_expandido,
-                    "ocorrencias_2026.csv",
-                    "text/csv",
-                    use_container_width=True
-                )
-            
+                grupos = st.multiselect("Grupos", options=sorted(df_expandido['Grupo'].unique()),placeholder="Todos") 
             with col3:
-                # Exportar conflitos
-                if conflitos:
-                    df_conflitos = pd.DataFrame(conflitos)
-                    csv_conflitos = df_conflitos.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        "📥 Conflitos (CSV)",
-                        csv_conflitos,
-                        "conflitos.csv",
-                        "text/csv",
-                        use_container_width=True
-                    )
-    
+                dias = st.multiselect("Dias", 
+                               options=["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"],
+                               placeholder="Todos")
+            with col4:
+                data = st.date_input("Data", value=None, format="DD/MM/YYYY")
+            
+            res_filtrado = df_expandido.copy()
+            # Aplicar filtros
+            if salas:
+                res_filtrado = res_filtrado[res_filtrado['Sala'].isin(salas)]
+            if grupos:
+                res_filtrado = res_filtrado[res_filtrado['Grupo'].isin(grupos)]
+            if dias:
+                dias_lower = [d.lower() for d in dias]
+                regex_dias = "|".join(dias_lower)
+                res_filtrado = res_filtrado[res_filtrado['Dia da semana'].str.contains(regex_dias, case=False, na=False)]
+            if data:
+                data_str = data.strftime('%d/%m/%Y')
+                res_filtrado = res_filtrado[res_filtrado['Data Ocorrência'] == data_str]
+            
+
+            res_filtrado['Data'] = pd.to_datetime(res_filtrado['Data Ocorrência'], dayfirst=True, format='%d/%m/%Y') 
+            res_filtrado = res_filtrado.sort_values(by=['Data', 'Hora Início'])
+            res_filtrado = res_filtrado.reset_index(drop=True)
+            
+            column_order=["Data", 'Dia da semana', "Sala", "Hora Início", "Hora fim", "Grupo", "Atividade", 
+                                       "Responsável"]
+            column_config={
+                "Data": st.column_config.DateColumn(format="DD/MM/YYYY")
+            }
+                        
+            res_filtrado = res_filtrado.drop(columns=['Data Início', 'Data Ocorrência','Status', 'id_reserva', 'Data Fim'])
+            res_filtrado = res_filtrado[column_order]
+            res_estilizado = df_styler.style_zebra(res_filtrado)
+            
+            with col5:
+                st.space("small")
+                st.download_button(
+                            "📥 Exportar",
+                            res_filtrado.to_csv(index=False).encode('utf-8'),
+                            "reservas.csv",
+                            "text/csv",
+                            width="stretch"
+                        )
+            
+            st.dataframe(
+                res_estilizado,
+                width="stretch",
+                height=400,
+                hide_index=True,
+                column_config=column_config
+            )
+        
+        with tab_conflitos:
+            df_conf = pd.DataFrame(conflitos)
+            
+            if df_conf.empty:
+                st.info("Nenhum conflito detectado.")
+            else:
+                # --- FUNÇÃO DE FORMATAÇÃO ---
+                def formatar_grupo_resp(row, num):
+                    # Pega o grupo e a string de responsáveis (ex: "João/Maria/José")
+                    grupo = row[f'grupo{num}']
+                    resps_raw = str(row.get(f'responsavel{num}', ''))
+                    
+                    # Divide pela barra, pega até 2 nomes e limpa espaços
+                    resps_lista = [r.strip() for r in resps_raw.split('/') if r.strip()][:2]
+                    
+                    if resps_lista:
+                        resps_str = " / ".join(resps_lista)
+                        return f"{grupo} ({resps_str})"
+                    return grupo
+
+                # Criamos colunas formatadas apenas para exibição
+                df_conf['Grupo A (Responsáveis)'] = df_conf.apply(lambda r: formatar_grupo_resp(r, 1), axis=1)
+                df_conf['Grupo B (Responsáveis)'] = df_conf.apply(lambda r: formatar_grupo_resp(r, 2), axis=1)
+                
+                # Preparação de filtros (mesma lógica anterior)
+                c1, c2, c3, c4, c5 = st.columns(5)
+                with c1: salas_conf = st.multiselect("Salas", sorted(df_conf['sala'].unique()), key="c_s", placeholder="Todas")
+                with c2: 
+                    grupos_lista = sorted(list(set(df_conf['grupo1']) | set(df_conf['grupo2'])))
+                    grupos_conf = st.multiselect("Grupos", grupos_lista, key="c_g", placeholder="Todos")
+                with c3: dias_conf = st.multiselect("Dias", options=["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"], key="c_d", placeholder="Todos")
+                with c4: data_conf = st.date_input("Data", value=None, format="DD/MM/YYYY", key="c_dt")
+                
+                # --- FILTRAGEM ---
+                conf_f = df_conf.copy()
+                if salas_conf: conf_f = conf_f[conf_f['sala'].isin(salas_conf)]
+                if grupos_conf: conf_f = conf_f[(conf_f['grupo1'].isin(grupos_conf)) | (conf_f['grupo2'].isin(grupos_conf))]
+                if dias_conf: conf_f = conf_f[conf_f['dia_semana'].str.contains("|".join(dias_conf), case=False, na=False)]
+                if data_conf: conf_f = conf_f[conf_f['data'] == data_conf.strftime('%d/%m/%Y')]
+
+                # Ordenação por data real
+                conf_f['data'] = pd.to_datetime(conf_f['data'], dayfirst=True, format='%d/%m/%Y')
+                conf_f = conf_f.sort_values(['data', 'horario1'])
+                
+                column_order=[
+                        "data", "dia_semana", "sala", 
+                        "horario1", "Grupo A (Responsáveis)", "atividade1",
+                        "horario2", "Grupo B (Responsáveis)", "atividade2"
+                    ]
+                
+                column_config={
+                        "data": "Data",
+                        "dia_semana": "Dia da Semana",
+                        "sala": "Sala",
+                        "horario1": "Horário A",
+                        "horario2": "Horário B",
+                        "atividade1": "Atividade A",
+                        "atividade2": "Atividade B",
+                        "Grupo A (Responsáveis)": "Grupo A (Responsáveis)",
+                        "Grupo B (Responsáveis)": "Grupo B (Responsáveis)"
+                    }
+                
+                conf_f = conf_f.drop(columns= conf_f.columns.difference(column_order))
+                df_estilizado = df_styler.style_zebra(conf_f[column_order])
+                conf_f = conf_f.rename(columns=column_config)
+                
+                with c5:
+                    st.space("small")
+                    st.download_button("📥 Exportar", conf_f.to_csv(index=False).encode('utf-8'), 
+                                       "conflitos.csv", "text/csv", width="stretch")
+                    
+                column_config['data'] = st.column_config.DateColumn(
+                    "Data", 
+                    format="DD/MM/YYYY"
+                )
+                # --- EXIBIÇÃO ---
+                st.dataframe(
+                    df_estilizado,
+                    width="stretch",
+                    height=400,
+                    hide_index=True,
+                    column_config=column_config
+                )
+
     # Footer
     st.divider()
     st.caption("💡 Sistema de Gestão de Reservas de Salas 2026 • Dados atualizados automaticamente")

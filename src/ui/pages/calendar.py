@@ -105,10 +105,9 @@ def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, c
             }}
         """
         
-        print(f"Filtrando grupo: {group_filter}")
         if group_filter != "Todas":
-            print(f"Filtrando grupo: {group_filter}")
-            events_base = [e for e in events_base if e['extendedProps']['grupo'] == group_filter]
+            st.session_state["events"] = [e for e in events_base if e['extendedProps']['grupo'] == group_filter]
+        else:
             st.session_state["events"] = events_base
             
         state = calendar(
