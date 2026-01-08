@@ -19,22 +19,36 @@ def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, c
     if "last_df_view" not in st.session_state:
         st.session_state["last_df_view"] = pd.DataFrame()  # Inicializa vazio
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        mode = st.selectbox("Visualização:", get_calendar_modes(), key="calendar_view_mode")
-    with col2:
-        weekday_map = {
-            "Segunda": 1, "Terça": 2, "Quarta": 3, 
-            "Quinta": 4, "Sexta": 5, "Sábado": 6, "Domingo": 0
-        }
-        weekday_filter = st.selectbox("Dias da Semana:", ["Todos"] + list(weekday_map.keys()),
-                                        index=0, key="calendar_start_weekday")
-    with col3:
-        st.space(20)
-        apenas_conflitos = st.toggle("Apenas Conflitos", value=False, key="calendar_only_conflicts")
+    # col1, col2, col3 = st.columns(3)
+    # with col1:
+    #     mode = st.selectbox("Visualização:", get_calendar_modes(), key="calendar_view_mode")
+    # with col2:
+    #     weekday_map = {
+    #         "Segunda": 1, "Terça": 2, "Quarta": 3, 
+    #         "Quinta": 4, "Sexta": 5, "Sábado": 6, "Domingo": 0
+    #     }
+    #     weekday_filter = st.selectbox("Dias da Semana:", ["Todos"] + list(weekday_map.keys()),
+    #                                     index=0, key="calendar_start_weekday")
+    # with col3:
+    #     st.space(20)
+    
+    with st.container(horizontal_alignment="right"):
+        with st.popover("Filtros"):
+            mode = st.selectbox("Visualização:", get_calendar_modes(), key="calendar_view_mode")
+            
+            weekday_map = {
+                "Segunda": 1, "Terça": 2, "Quarta": 3, 
+                "Quinta": 4, "Sexta": 5, "Sábado": 6, "Domingo": 0
+            }
+            weekday_filter = st.selectbox("Dias da Semana:", ["Todos"] + list(weekday_map.keys()),
+                                            index=0, key="calendar_start_weekday")
+            
+            group_filter = st.selectbox("Grupos:", 
+                                        options=['Todas'] + sorted(df_expandido['Grupo'].unique()))
+            
+            apenas_conflitos = st.toggle("Apenas Conflitos", value=False, key="calendar_only_conflicts")
         
-    col_calendario, col_lista = st.columns([0.8, 0.2])
-
+    col_calendario, col_lista = st.columns([0.8, 0.2])    
     with col_calendario: 
         hidden_days = []   
         if weekday_filter != "Todos":
@@ -90,17 +104,23 @@ def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, c
                 padding: 4px 8px !important;
             }}
         """
+        
+        print(f"Filtrando grupo: {group_filter}")
+        if group_filter != "Todas":
+            print(f"Filtrando grupo: {group_filter}")
+            events_base = [e for e in events_base if e['extendedProps']['grupo'] == group_filter]
+            st.session_state["events"] = events_base
             
         state = calendar(
             events=st.session_state.get("events", events_base),
             options=calendar_options,
             custom_css= full_custom_css,
-            key=f"full_calendar_{mode}_{weekday_filter}_{apenas_conflitos}",
+            key=f"full_calendar_{mode}_{weekday_filter}_{apenas_conflitos}_{group_filter}",
         )
         
         # st.write(state)
 
-    with col_lista:
+    with col_lista:            
         if state and "eventsSet" in state and "view" in state["eventsSet"]:
             v_start = pd.to_datetime(state["eventsSet"]["view"]["activeStart"]).tz_localize(None)
             v_end = pd.to_datetime(state["eventsSet"]["view"]["activeEnd"]).tz_localize(None)
@@ -115,6 +135,9 @@ def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, c
             
             if apenas_conflitos:
                 df_filtrado = df_filtrado[df_filtrado['id_reserva'].isin(ids_em_conflito)]
+                
+            if group_filter != "Todas":
+                df_filtrado = df_filtrado[df_filtrado['Grupo'] == group_filter]
             
             st.session_state["last_df_view"] = df_filtrado.sort_values(['Data Ocorrência View', 'Hora Início'])
 
@@ -136,7 +159,8 @@ def generate_calendar_page(df_expandido: pd.DataFrame, df_salas: pd.DataFrame, c
         # 3. Criar dicionário de sugestões mapeado pelo ID do conflito
         dict_sugestoes = {str(s['id_conflito']): s for s in sugestoes}
 
-        st.space("medium")
+        st.markdown(f"##### 📋 Lista de Eventos ({len(df_view)})")
+        st.space(1)
         with st.container(height=900):
             if df_view.empty:
                 st.info("Nenhum evento visível.")

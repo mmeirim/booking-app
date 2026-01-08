@@ -1,7 +1,6 @@
 import pandas as pd
 import streamlit as st
 
-@st.cache_data
 def prepare_resources(df_expandido):
     resources = []
     for _, row in df_expandido.iterrows():
@@ -13,7 +12,6 @@ def prepare_resources(df_expandido):
         resources.append(resource)
     return resources
 
-@st.cache_data
 def prepare_events(df_expandido, group_colors, ids_em_conflito):
     events = []
     for _, row in df_expandido.iterrows():
@@ -51,7 +49,6 @@ def prepare_events(df_expandido, group_colors, ids_em_conflito):
         events.append(event)
     return events
 
-@st.cache_data
 def generate_color_palette(groups):
     """Generate a color palette for rooms"""
     colors = [

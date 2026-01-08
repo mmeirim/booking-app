@@ -234,7 +234,11 @@ def main():
         st.divider()
         
         # Botão de atualizar
+        if "calendar_reset_token" not in st.session_state:
+            st.session_state.calendar_reset_token = 0
+        
         if st.button("🔄 Atualizar Dados", type="primary", use_container_width=True):
+            st.session_state.calendar_reset_token += 1
             st.cache_data.clear()
             st.rerun()
     
